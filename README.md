@@ -35,7 +35,7 @@ If you installed by symlink you're done. If you installed by copy, re-run `./ins
 
 | Category | Skills |
 |---|---|
-| PR & git workflow | `pr`, `pr-review`, `pr-self-review`, `pr-copilot-loop` |
+| PR & git workflow | `pr`, `pr-review`, `pr-self-review`, `pr-copilot-loop`, `prs-awaiting-my-review` |
 | Kanban / backlog automation | `next-task`, `groom-backlog`, `implement-epic` |
 | Other tools | `clockify-log` |
 
