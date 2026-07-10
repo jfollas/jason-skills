@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Review someone's pull request as the reviewer. Read the diff and the surrounding code, find merge blockers first, leave inline code comments (with concrete suggestion blocks) and/or general PR comments, and submit a single review — APPROVE only when the invoking prompt asked to and no blockers were found, otherwise COMMENT or REQUEST_CHANGES. Triggers on "review PR <N>", "look for blockers on <PR>", "leave review comments on <PR>", "approve <PR> if it's clean".
+description: Review someone's pull request as the reviewer. Read the diff and the surrounding code, find merge blockers first, leave inline code comments (with concrete suggestion blocks) and/or general PR comments, and submit a single review — by default APPROVE when no blockers are found, REQUEST_CHANGES when there are, and COMMENT for a plan-only PR (approve the plan in prose, not the PR) or when the user asked for comments only. Triggers on "review PR <N>", "look for blockers on <PR>", "leave review comments on <PR>", "approve <PR> if it's clean".
 ---
 
 # PR Review (reviewer side)
@@ -17,7 +17,7 @@ Act as the reviewer of a pull request. The deliverable is a posted GitHub review
 ## Inputs
 
 - **PR number** — from the user, or inferred from the current branch with `gh pr view --json number`, or asked if ambiguous.
-- **Approve intent** — only approve if the invoking prompt explicitly asks to (e.g. "approve if no blockers"). If it doesn't mention approving, post comments and stop with a recommended verdict; don't submit an APPROVE on your own initiative.
+- **Approve intent** — **the default is to APPROVE when you find no blockers.** You don't need the prompt to ask for it. Do *not* auto-approve in these cases (see step 5): a **plan-only PR** (comment instead, and you may say you approve the *plan*), a PR the user explicitly asked you to only comment on, a draft, or one you authored.
 
 ## Flow
 
@@ -32,6 +32,8 @@ gh pr view <PR> --json files --jq '.files[].path'
 ```
 
 If the PR is a **draft**, say so and confirm the user still wants a review before posting anything.
+
+**Decide early whether this is a plan-only PR.** A plan-only PR changes *only* planning/design docs (e.g. everything under a `docs/plans/**`, `docs/design/**`, or similar, or the diff is purely `.md` with no source/test/schema/config code) — often with a title/body that says "plan", "design", "proposal", or "RFC" and describes implementation to follow. The signal is that the author wants the **approach** reviewed before writing the code, and the implementation will usually be added to this same PR later. This changes the verdict (step 5): you comment, you may endorse the plan in prose, but you do **not** submit an APPROVE — approving now would prematurely green-light code that doesn't exist yet.
 
 **If the repo has agent instructions, load them now.** A repo `CLAUDE.md` plus its referenced `instructions/**` and `DESIGN.md` define what counts as a blocker here (guardrails, SOLID/refactoring rules, DB standards, UI branding gates, etc.). Review against those, not just generic taste. Check existing CI status too — `gh pr checks <PR>` — failing required checks are blockers.
 
@@ -102,9 +104,9 @@ The review `body` is the top-level summary the author reads first:
 
 Pick the `event`:
 
-- **`APPROVE`** — only if the prompt asked you to approve *and* you found no blockers. State plainly that you found no blockers and what you did/didn't verify.
+- **`APPROVE`** — **the default when you found no blockers.** You don't need the prompt to ask. State plainly that you found no blockers and what you did/didn't verify. Do not APPROVE if any of the no-auto-approve cases below apply.
 - **`REQUEST_CHANGES`** — there's at least one blocker.
-- **`COMMENT`** — non-blocking feedback only, or blockers exist but the prompt didn't authorize a verdict, or it's a draft. Recommend a verdict in prose and let the user act.
+- **`COMMENT`** — use instead of APPROVE, even with no blockers, when: it's a **plan-only PR** (see step 1), the user explicitly asked for comments only, or it's a draft. For a plan-only PR, say so and — if the plan is sound — endorse it in prose ("The plan looks good to me; approving the approach, not the PR, since the implementation lands here next"); recommend the verdict and let the user act.
 
 Submitting the review (step 4's API call) carries the `event`, so set it correctly before posting. `gh pr review <PR> --approve|--request-changes|--comment --body-file <f>` is the alternative when you have **no** inline comments.
 
@@ -118,7 +120,7 @@ These match this user's established conventions:
 
 - **No local paths or machine-specific text** in any posted comment (`/tmp`, `/home/...`, etc.) — review comments are shared artifacts.
 - **No cross-repo or internal references** the PR's audience can't see (other repos, internal issue trackers, impl-plan docs) unless they're already part of this repo's public context.
-- **Don't approve a PR you were only asked to comment on.** Approval is an outward-facing action; honor the prompt's intent and don't escalate the verdict.
+- **Approve a clean PR by default, but withhold APPROVE in the no-auto-approve cases** (plan-only PR, comments-only request, draft, self-authored). Approval is an outward-facing action — never approve while a blocker stands, and never approve a plan-only PR (endorse the plan in prose instead).
 - **Be specific and kind.** Every blocker gets a concrete reason and, where possible, a suggested fix. Cite `file:line`. No vague "this seems off."
 - **Don't post duplicate reviews.** If you already submitted one this session and the user asks for changes, edit/extend rather than stacking a second contradictory verdict — check `gh pr view <PR> --json reviews` first.
 
