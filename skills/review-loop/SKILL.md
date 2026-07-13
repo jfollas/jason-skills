@@ -25,7 +25,11 @@ Schedule the recurrence with **two CronCreate jobs** sharing the identical loop 
 - Daytime: cron `*/5 7-17 * * *` (every 5 minutes, 7:00am through 5:55pm local)
 - Off-hours: cron `*/30 18-23,0-6 * * *` (every 30 minutes, 6:00pm through 6:30am local)
 
-If the user gave a flat interval instead, create one job at that cadence. Then immediately run the first iteration. Remind the user: session-scoped cron jobs auto-expire after 7 days and die with the session; give them **both** job IDs for CronDelete.
+If the user gave a flat interval instead, create one job at that cadence.
+
+**Run the first iteration immediately** — as soon as the jobs are scheduled, execute a full "Each iteration" pass in the same turn (idle check trivially passes on invocation). Do NOT wait for the first cron tick; the user invoked the skill because they want the queue checked now.
+
+Remind the user: session-scoped cron jobs auto-expire after 7 days and die with the session; give them **both** job IDs for CronDelete.
 
 ### The loop prompt (pass verbatim to the scheduler)
 
