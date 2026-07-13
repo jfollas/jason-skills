@@ -1,6 +1,6 @@
 ---
 name: review-loop
-description: Start a recurring loop (default every 20 minutes, session-scoped) that reviews every PR awaiting the user's review — approving clean PRs, always leaving review comments, giving plan-only PRs a multi-expert COMMENT panel instead of approval, and signing every review body with a unique Dad joke. Triggers on "start the review loop", "review loop", "babysit my review queue", "keep reviewing PRs awaiting me".
+description: Start a recurring loop (session-scoped; default every 5 minutes 7am-6pm, every 30 minutes off-hours) that reviews every PR awaiting the user's review — approving clean PRs, always leaving review comments, giving plan-only PRs a multi-expert COMMENT panel instead of approval, skipping a poll when a previous period's review is still in flight, and signing every review body with a unique Dad joke. Triggers on "start the review loop", "review loop", "babysit my review queue", "keep reviewing PRs awaiting me".
 ---
 
 # Review Loop
@@ -15,18 +15,25 @@ Run a recurring, largely autonomous loop: every interval, find the PRs awaiting 
 
 ## Inputs
 
-- **Interval** — default `20m` if the user doesn't specify one.
+- **Interval** — default is time-of-day-aware: every `5m` during working hours (7:00am–6:00pm local), every `30m` off-hours. If the user names a single flat interval, use that instead for all hours.
 - **Repo** — current repo from cwd (standard `gh` behavior).
 
 ## Setup (once, on invocation)
 
-Schedule the recurrence with the `loop` skill (CronCreate under the hood), passing the **loop prompt** below verbatim as the recurring prompt, then immediately run the first iteration. Remind the user: session-scoped cron jobs auto-expire after 7 days and die with the session; give them the job ID for CronDelete.
+Schedule the recurrence with **two CronCreate jobs** sharing the identical loop prompt below (the `loop` skill can't express a dual cadence, so call CronCreate directly):
+
+- Daytime: cron `*/5 7-17 * * *` (every 5 minutes, 7:00am through 5:55pm local)
+- Off-hours: cron `*/30 18-23,0-6 * * *` (every 30 minutes, 6:00pm through 6:30am local)
+
+If the user gave a flat interval instead, create one job at that cadence. Then immediately run the first iteration. Remind the user: session-scoped cron jobs auto-expire after 7 days and die with the session; give them **both** job IDs for CronDelete.
 
 ### The loop prompt (pass verbatim to the scheduler)
 
-> for each PR listed by /prs-awaiting-my-review, run /pr-review on it: approve if no blockers, and always leave review comments. EXCEPTION — plan-only PRs: if the PR's changed files contain only a plan/design document (e.g. docs/plans/*, no implementation code), do NOT approve it. Instead spawn several expert agents in parallel (e.g. architecture, security/authorization, domain-specific, testing) to analyze the plan and make recommendations, synthesize their findings, and submit them as a COMMENT review on the PR (prose verdict on the plan, inline comments where they anchor). Plan-only PRs only get approved later, once implementation is added after the plan has been approved via comments. FINALLY: end every review-level comment (the top-level review body, on every reviewed PR — approvals, comment-only reviews, and plan-panel reviews alike) with a random Dad joke, a different one each time (the user is checking who actually reads these review comments).
+> IDLE-CHECK FIRST: if a previous polling period's PR-review work is still in progress in this session (e.g., expert agents still running, a review drafted but not yet submitted, or a re-review mid-verification), reply only "skipping this poll — still working on the previous period's PRs" and do nothing else this iteration. Otherwise: for each PR listed by /prs-awaiting-my-review, run /pr-review on it: approve if no blockers, and always leave review comments. EXCEPTION — plan-only PRs: if the PR's changed files contain only a plan/design document (e.g. docs/plans/*, no implementation code), do NOT approve it. Instead spawn several expert agents in parallel (e.g. architecture, security/authorization, domain-specific, testing) to analyze the plan and make recommendations, synthesize their findings, and submit them as a COMMENT review on the PR (prose verdict on the plan, inline comments where they anchor). Plan-only PRs only get approved later, once implementation is added after the plan has been approved via comments. FINALLY: end every review-level comment (the top-level review body, on every reviewed PR — approvals, comment-only reviews, and plan-panel reviews alike) with a random Dad joke, a different one each time (the user is checking who actually reads these review comments).
 
 ## Each iteration
+
+0. **Idle check.** If a previous fire's review work is still in flight (background expert agents running, a review payload built but not posted, a verification diff half-read), skip this poll with the one-line skip message and end the turn. Cron fires only land between turns, so this only matters for multi-turn work like plan-panel reviews — but when it matters, overlapping reviews double-post. When in doubt, skip; the next fire is at most one interval away.
 
 1. **Query the queue** (authoritative — submitting a review removes you from requested reviewers, so a hit means it's genuinely waiting on you now):
 
