@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Review someone's pull request as the reviewer. Read the diff and the surrounding code, find merge blockers first, leave inline code comments (with concrete suggestion blocks) and/or general PR comments, and submit a single review — by default APPROVE when no blockers are found, REQUEST_CHANGES when there are, and COMMENT for a plan-only PR (approve the plan in prose, not the PR) or when the user asked for comments only. Triggers on "review PR <N>", "look for blockers on <PR>", "leave review comments on <PR>", "approve <PR> if it's clean".
+description: Review someone's pull request as the reviewer. Read the diff and the surrounding code, find merge blockers first, leave inline code comments (with concrete suggestion blocks) and/or general PR comments, and submit a single review — by default APPROVE when no blockers are found, REQUEST_CHANGES when there are, and COMMENT for a plan-only PR (approve the plan in prose, not the PR) or when the user asked for comments only. On a re-review, resolves your own prior comment threads that the code now actually addresses. Triggers on "review PR <N>", "look for blockers on <PR>", "leave review comments on <PR>", "approve <PR> if it's clean".
 ---
 
 # PR Review (reviewer side)
@@ -17,7 +17,7 @@ Act as the reviewer of a pull request. The deliverable is a posted GitHub review
 ## Inputs
 
 - **PR number** — from the user, or inferred from the current branch with `gh pr view --json number`, or asked if ambiguous.
-- **Approve intent** — **the default is to APPROVE when you find no blockers.** You don't need the prompt to ask for it. Do *not* auto-approve in these cases (see step 5): a **plan-only PR** (comment instead, and you may say you approve the *plan*), a PR the user explicitly asked you to only comment on, a draft, or one you authored.
+- **Approve intent** — **the default is to APPROVE when you find no blockers.** You don't need the prompt to ask for it. Do *not* auto-approve in these cases (see step 6): a **plan-only PR** (comment instead, and you may say you approve the *plan*), a PR the user explicitly asked you to only comment on, a draft, or one you authored.
 
 ## Flow
 
@@ -33,11 +33,41 @@ gh pr view <PR> --json files --jq '.files[].path'
 
 If the PR is a **draft**, say so and confirm the user still wants a review before posting anything.
 
-**Decide early whether this is a plan-only PR.** A plan-only PR changes *only* planning/design docs (e.g. everything under a `docs/plans/**`, `docs/design/**`, or similar, or the diff is purely `.md` with no source/test/schema/config code) — often with a title/body that says "plan", "design", "proposal", or "RFC" and describes implementation to follow. The signal is that the author wants the **approach** reviewed before writing the code, and the implementation will usually be added to this same PR later. This changes the verdict (step 5): you comment, you may endorse the plan in prose, but you do **not** submit an APPROVE — approving now would prematurely green-light code that doesn't exist yet.
+**Decide early whether this is a plan-only PR.** A plan-only PR changes *only* planning/design docs (e.g. everything under a `docs/plans/**`, `docs/design/**`, or similar, or the diff is purely `.md` with no source/test/schema/config code) — often with a title/body that says "plan", "design", "proposal", or "RFC" and describes implementation to follow. The signal is that the author wants the **approach** reviewed before writing the code, and the implementation will usually be added to this same PR later. This changes the verdict (step 6): you comment, you may endorse the plan in prose, but you do **not** submit an APPROVE — approving now would prematurely green-light code that doesn't exist yet.
 
 **If the repo has agent instructions, load them now.** A repo `CLAUDE.md` plus its referenced `instructions/**` and `DESIGN.md` define what counts as a blocker here (guardrails, SOLID/refactoring rules, DB standards, UI branding gates, etc.). Review against those, not just generic taste. Check existing CI status too — `gh pr checks <PR>` — failing required checks are blockers.
 
-### 2. Read the code, not just the diff
+### 2. If this is a re-review, resolve your prior threads that are now addressed
+
+Check whether you've already reviewed this PR:
+
+```bash
+ME=$(gh api user --jq .login)
+gh api repos/:owner/:repo/pulls/<PR>/reviews --jq "[.[] | select(.user.login==\"$ME\")] | length"
+```
+
+`0` → first-time review, skip to step 3.
+
+`> 0` → this is a re-review:
+
+- Scope your re-read to what's new: find your last review's commit (`gh api repos/:owner/:repo/pulls/<PR>/reviews --jq '[.[] | select(.user.login=="'"$ME"'")] | last | .commit_id'`), then `git fetch origin <headRef>` and `git diff <reviewed-sha>..origin/<headRef>` to see what changed since.
+- Pull the PR's review threads via GraphQL (REST doesn't expose thread ids or resolve state):
+  ```bash
+  gh api graphql -f query='query { repository(owner:"<owner>", name:"<repo>") { pullRequest(number: <PR>) {
+    reviewThreads(first: 100) { nodes { id isResolved isOutdated
+      comments(first: 1) { nodes { path line body author { login } } } } } } } }'
+  ```
+- For every **unresolved** thread whose first comment is one of **your own** from a prior round, `Read` the file at the current head around that path/line and judge — from the actual code, not from a reply claiming it's fixed — whether the concern was genuinely addressed.
+- Resolve each thread you've verified as fixed:
+  ```bash
+  gh api graphql -f query='mutation { resolveReviewThread(input: { threadId: "<thread node id>" }) { thread { isResolved } } }'
+  ```
+- Leave a thread open if the concern wasn't addressed, was only partially addressed, or you can't confirm the fix from the code — resolving is a claim that you, the reviewer, are satisfied; don't make that claim without verifying it yourself. Don't resolve threads started by someone else (a human co-reviewer, Copilot) — that's not yours to close.
+- A new commit may have auto-dismissed your prior approval; re-approving after re-verification (step 6) is expected, not a special case.
+
+Then continue to step 3 with the full diff (or the scoped since-last-review diff, at your judgment — a small change since last review may only need the delta read; a large one may warrant a fresh full pass).
+
+### 3. Read the code, not just the diff
 
 For every non-trivial changed file, `Read` the actual file (with `offset`/`limit`) around the changed lines. The diff hides:
 
@@ -47,7 +77,7 @@ For every non-trivial changed file, `Read` the actual file (with `offset`/`limit
 
 Don't flag from the diff alone — a hunk can look wrong but be correct in context, and vice-versa.
 
-### 3. Classify findings: blocker vs non-blocking
+### 4. Classify findings: blocker vs non-blocking
 
 **Blockers** (must be resolved before merge — these drive REQUEST_CHANGES):
 
@@ -62,7 +92,7 @@ Don't flag from the diff alone — a hunk can look wrong but be correct in conte
 
 Lead with blockers. Keep nits few and clearly optional — a wall of nits buries the things that matter. If you're unsure whether something is a real problem, say so and ask rather than asserting a blocker.
 
-### 4. Stage inline comments (with suggestions where they help)
+### 5. Stage inline comments (with suggestions where they help)
 
 Build one review with all inline comments batched, rather than firing many separate comment calls. Write the comment payload to a JSON file to avoid shell-escape pain:
 
@@ -70,7 +100,7 @@ Build one review with all inline comments batched, rather than firing many separ
 cat > /tmp/pr-review-<PR>.json <<'EOF'
 {
   "event": "COMMENT",
-  "body": "<overall summary — see step 5>",
+  "body": "<overall summary — see step 6>",
   "comments": [
     {
       "path": "src/foo.ts",
@@ -93,7 +123,7 @@ Suggestion-block rules (they're worth getting exactly right — a bad one can't 
 
 Lead each blocker comment with the word **"Blocker:"** and each optional one with **"Nit:"** so the author can triage at a glance.
 
-### 5. Write the summary body and pick the verdict
+### 6. Write the summary body and pick the verdict
 
 The review `body` is the top-level summary the author reads first:
 
@@ -108,11 +138,11 @@ Pick the `event`:
 - **`REQUEST_CHANGES`** — there's at least one blocker.
 - **`COMMENT`** — use instead of APPROVE, even with no blockers, when: it's a **plan-only PR** (see step 1), the user explicitly asked for comments only, or it's a draft. For a plan-only PR, say so and — if the plan is sound — endorse it in prose ("The plan looks good to me; approving the approach, not the PR, since the implementation lands here next"); recommend the verdict and let the user act.
 
-Submitting the review (step 4's API call) carries the `event`, so set it correctly before posting. `gh pr review <PR> --approve|--request-changes|--comment --body-file <f>` is the alternative when you have **no** inline comments.
+Submitting the review (step 5's API call) carries the `event`, so set it correctly before posting. `gh pr review <PR> --approve|--request-changes|--comment --body-file <f>` is the alternative when you have **no** inline comments.
 
-### 6. Report back
+### 7. Report back
 
-Return the PR URL, the verdict you submitted, and a one-line blocker count. Then `rm -f /tmp/pr-review-<PR>.json`.
+Return the PR URL, the verdict you submitted, and a one-line blocker count. On a re-review, also report how many prior threads you resolved (and how many you left open with why). Then `rm -f /tmp/pr-review-<PR>.json`.
 
 ## Guardrails for what you post
 
@@ -126,8 +156,10 @@ These match this user's established conventions:
 
 ## Gotchas
 
-- **`event: "APPROVE"` with a non-empty critical body is contradictory** — if you're approving, the body shouldn't list blockers. Resolve the verdict in step 3 before writing the body.
+- **`event: "APPROVE"` with a non-empty critical body is contradictory** — if you're approving, the body shouldn't list blockers. Resolve the verdict in step 4 before writing the body.
 - **A suggestion anchored to the wrong `line` posts on the wrong code** and looks careless. Re-read the diff hunk header to map file lines to diff lines before setting `line`.
 - **Commenting on a line outside the diff returns 422.** Move it to the summary body or anchor it to the nearest changed line with a note.
 - **422 "pull_request_review_thread.line must be part of the diff"** usually means `side` is wrong (LEFT vs RIGHT) or the line isn't in the changed range.
 - **Self-authored PRs** — GitHub forbids approving your own PR; the API rejects it. If you're the author, post `COMMENT` only and say so.
+- **`resolveReviewThread` takes the thread's GraphQL node id, not a REST comment id** — the two look similar but aren't interchangeable; fetch `reviewThreads.nodes[].id` first (step 2).
+- **Resolving is not the same as replying.** Don't resolve a thread just because you posted a reply — resolve only after reading the current code and confirming the concern no longer holds.
